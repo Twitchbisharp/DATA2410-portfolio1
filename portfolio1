@@ -1,0 +1,585 @@
+import argparse
+import sys
+import re
+import ipaddress
+from socket import *
+import _thread as thread
+import time
+import math
+import pickle
+
+
+def check_port(val):
+    try:
+        int(val)
+    except:
+        raise argparse.ArgumentTypeError("The port number", val, "is not an integer", type(val))
+
+    val = int(val)
+    if val >= 1024 and val <= 65535:
+        return val
+    else:
+        raise argparse.ArgumentTypeError("The port number must be between 1024 and 65535")
+
+#Reference to regex ip-address: https://www.oreilly.com/library/view/regular-expressions-cookbook/9780596802837/ch07s16.html
+#date retrieved: 16.03.2023 - 13:38
+def check_ip(val):
+    try:
+        val = ipaddress.ip_address(val)
+    except:
+        raise argparse.ArgumentTypeError("IP-address syntax wrong")
+    return val
+    
+    #if re.match(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}", val):
+    #    return val
+    #else:
+    #    raise argparse.ArgumentTypeError("IP-address syntax wrong")
+    
+
+def check_time(val):
+    try:
+        int(val)
+    except:
+        raise argparse.ArgumentTypeError("Time", val ,"must be of type integer")
+    
+    val = int(val)
+    if val > 0:
+        return val
+    else:
+        raise argparse.ArgumentTypeError("Time must be more than 0")
+
+def check_parallel(val):
+    try:
+        int(val)
+    except:
+        raise argparse.ArgumentTypeError("The number of parallel connections was not an integer")
+    
+    val = int(val)
+    if val > 0 and val < 6:
+        return val
+    else:
+        raise argparse.ArgumentTypeError("The number of parallel connections must be between 1 and 5")
+
+def check_interval(val):
+    try:
+        int(val)
+    except:
+        raise argparse.ArgumentTypeError("Interval must be of type integer")
+    
+    val = int(val)
+    if val > 0:
+        return val
+    else:
+        raise argparse.ArgumentTypeError("Interval must be above 0")
+
+def check_bytes(val):
+    #Source https://www.w3schools.com/python/python_regex.asp
+    #Date: 17.03.2023 14:21
+    numberArray=re.findall("(\d+)", val)
+    letterArray=re.findall("(\D+)", val)
+    if len(numberArray) > 1: 
+        raise argparse.ArgumentTypeError("Only write one number") #e.g. 23B12
+    elif len(numberArray) == 0:
+        raise argparse.ArgumentTypeError("You must specify a number") #e.g. B
+    elif len(letterArray) > 1:
+        raise argparse.ArgumentTypeError("Only one word allowed") #e.g. B23B
+    elif len(letterArray) == 0:
+        raise argparse.ArgumentTypeError("You must specify bit size") #e.g. 23
+    elif len(list(letterArray[0])) > 1:
+        raise argparse.ArgumentTypeError("The bit size should only consist of one of these letters: B, K or M") #e.g 23SS
+    elif len(re.findall("[BKM]", letterArray[0])) == 0:
+        raise argparse.ArgumentTypeError("The bit size letter must be either B, K or M") #e.g. 32S
+    else:
+        return val
+
+def sekToClock(sek):
+    min = math.trunc((sek/60)%60)
+    hour = math.trunc(sek/3600)
+    sek = float(sek%60)
+
+    if hour == 0 and min == 0:
+        out = str(sek)
+        return out
+    elif hour == 0:
+        out = str(min),str(sek)
+        return ":".join(out)
+    else:
+        out = str(hour),str(min),str(sek)
+        return ":".join(out)
+
+def clockToSek(inTime):
+    inTime = inTime.split()[3].split(":")
+    sek = float(inTime[2])
+    min = int(inTime[1])
+    hour = int(inTime[0])
+
+    totalsek = sek + min*60 + hour*3600
+    return totalsek
+
+def serverSyncher(connectionSocket, recvWord, sendWord):
+    print("In serverClientSynch(119): waiting for", recvWord, "...")
+    r = 1
+    s = 1
+
+    while True:
+        connectionSocket.send(sendWord.encode())
+        print("\tSent",sendWord, s)
+        message = connectionSocket.recv(2048).decode()
+        print("\tRecieve nr.", r)
+        if message == recvWord:
+            print("\tGot message:", message)
+            break
+        r+=1
+        s+=1
+    """
+
+    while True:
+        try:
+            message = connectionSocket.recv(2048).decode()
+            print("\tRecieve nr.",r)
+            if message == recvWord:
+                print("\tGot message", message)
+                connectionSocket.send(sendWord.encode())
+                print("\tSent",sendWord, s)
+                break
+            r+=1
+            s+=1
+        except KeyboardInterrupt:
+            pass
+    """
+
+    print("In serverSyncher(151): Waiting is over!")
+
+def clientSyncher(client_sd, recvWord, sendWord):
+    print("In clientSyncher(154): Waiting for", recvWord, "...")
+    r = 1
+    s = 1
+
+    while True:
+        message = client_sd.recv(2048).decode()
+        print("\tRecieve nr.",r)
+        if message == recvWord:
+            print("\tGot message", message)
+            client_sd.send(sendWord.encode())
+            print("\tSent",sendWord, s)
+            break
+        r+=1
+        s+=1
+    """
+    
+    while True:
+        client_sd.send(sendWord.encode())
+        print("\tSent",sendWord, s)
+        try:
+            message = client_sd.recv(2048).decode()
+            print("\tRecieve nr.", r)
+            if message == recvWord:
+                print("\tGot message:", message)
+                break
+            r+=1
+            s+=1
+        except KeyboardInterrupt:
+            pass
+    """
+
+    print("clientSyncher(185): Waiting is over")
+
+def intervalServer(goalTime, interval, format, serverip, port, connectionSocket):
+    start = clockToSek(time.ctime())    #Current time
+    oldEnd = start                      #previous timecheck (used in display time intervals)
+    end = start                         #timechecker for each interval
+    recieved = 0                        #nr. of kilobytes per interval if used
+    totalRecieved = 0                   # nr. of total kilobytes independent of interval
+    flag=True                           #a check to only print once per interval
+    rate = 0                            #in Mbps
+    ratemultiplier=1                    #for converting to Mbps later
+
+    while end-start < goalTime:              #checks passed time equals set time
+        if connectionSocket.recv(2048).decode() != "":  #if the socket recieved something
+            if format == "MB":           # if the client wants MB format
+                recieved += 1/(1000)                    #1KB / 1000 = 1MB
+                totalRecieved += 1/(1000)
+                ratemultiplier=1                        #for converting to Mbps later
+            elif format == "KB":         #if the client wants KB format
+                recieved += 1
+                totalRecieved += 1
+                ratemultiplier=1/1000                   #for converting to Mbps later
+            elif format == "B":          #if the client wants B format
+                recieved += 1000
+                totalRecieved += 1000
+                ratemultiplier=1/1000000                #for converting to Mbps later
+        if (end-start)%interval == 0 and interval != 1:
+            if flag==True:                              #used to only print once per interval
+                print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+                flag=False                              #used to only print once per interval
+                oldEnd = end                            #update the new start-interval
+                recieved = 0                            #reset the number of kilobytes recieved for the next interval
+        elif interval != 1:
+            flag=True
+            
+        #if interval is 1
+        if interval == 1:
+            if (end-start)%2==0 and flag == True:
+                print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+                flag=False                              #used to only print once per interval
+                oldEnd = end                            #update the new start-interval
+                recieved = 0                            #reset the number of kilobytes recieved for the next interval
+            elif (end-start)%2==1 and flag == False:
+                print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+                flag=True                              #used to only print once per interval
+                oldEnd = end                            #update the new start-interval
+                recieved = 0                            #reset the number of kilobytes recieved for the next interval
+            end = clockToSek(time.ctime())
+        #End of if interval is 1
+
+        rate=math.trunc(recieved*8*ratemultiplier/interval) #calculates rate in Mbps (Megabit per second)
+        end = clockToSek(time.ctime())                      #updating end-time
+    #end of while-loop
+
+    print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+  
+def nonIntervalServer(goalTime, format, serverip, port, connectionSocket):
+    
+    start = clockToSek(time.ctime())    #Current time
+    #oldEnd = start                      #previous timecheck (used in display time intervals)
+    end = start                         #timechecker for each interval
+    recieved = 0                        #nr. of kilobytes per interval if used
+    #totalRecieved = 0                   # nr. of total kilobytes independent of interval
+    #flag=True                           #a check to only print once per interval
+    rate = 0                            #in Mbps
+    ratemultiplier=1                    #for converting to Mbps later
+
+    while end-start < goalTime:
+            if connectionSocket.recv(2048).decode() != "":
+                if connectionSocket.recv(2048).decode() == "Finished":
+                    break
+                if format == "MB":   #If the client wants to display transfer in Megabytes
+                    recieved += 1/(1000)
+                    ratemultiplier=1                #for converting to Mbps later
+                elif format == "KB": #If the client wants to display transfer in Kilobytes
+                    recieved += 1
+                    ratemultiplier=1/1000           #for converting to Mbps later
+                elif format == "B":  #If the client wants to display transfer in Bytes
+                    recieved += 1000
+                    ratemultiplier=1/1000000        #for converting to Mbps later
+            end = clockToSek(time.ctime())
+    rate=math.trunc(recieved*8*ratemultiplier/goalTime) #calculate rate in Megabit per second
+    print(serverip,":",port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+
+def intervalServerChecker(goalTime, interval, format, serverip, port, connectionSocket):
+    serverSyncher(connectionSocket, "Start", "Start")
+    
+    if interval != 0:
+        intervalServer(goalTime, interval, format, serverip, port, connectionSocket)
+    else:
+        nonIntervalServer(goalTime, format, serverip, port, connectionSocket)
+
+def intervalClient(goalTime, interval, format, serverip, port, client_sd, string):
+    start = clockToSek(time.ctime())    #Current time
+    oldEnd = start                      #previous timecheck (used in display time intervals)
+    end = start                         #timechecker for each interval
+    sent = 0                            #nr. of kilobytes per interval if used
+    totalsent = 0                       # nr. of total kilobytes independent of interval
+    flag=True                           #a check to only print once per interval
+    rate = 0                            #in Mbps
+    ratemultiplier=1                    #for converting to Mbps later
+    
+    while end-start < goalTime:              #checks passed time less than set time
+            client_sd.send(string.encode())
+            if format == "MB":                      # if the client wants MB format
+                sent += 1/(1000)                    #1KB / 1000 = 1MB
+                totalsent += 1/(1000)
+                ratemultiplier=1                    #for converting to Mbps later
+            elif format == "KB":                    #if the client wants KB format
+                sent += 1
+                totalsent += 1
+                ratemultiplier=1/1000               #for converting to Mbps later
+            elif format == "B":                     #if the client wants B format
+                sent += 1000
+                totalsent += 1000
+                ratemultiplier=1/1000000            #for converting to Mbps later
+
+
+            if (end-start)%interval == 0 and interval != 1: #For every interval bigger than 1
+                if flag==True:                              #used to only print once per interval
+                    print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(sent),format,"\t",rate,"Mbps\n")
+                    flag=False                              #used to only print once per interval
+                    oldEnd = end                            #update the new start-interval
+                    sent = 0                                #reset the number of kilobytes sent for the next interval
+            elif interval != 1:
+                flag=True
+                
+            #if interval is 1
+            if interval == 1:
+                if (end-start)%2==0 and flag == True:
+                    print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(sent),format,"\t",rate,"Mbps\n")
+                    flag=False                              #used to only print once per interval
+                    oldEnd = end                            #update the new start-interval
+                    sent = 0                                #reset the number of kilobytes recieved for the next interval
+                elif (end-start)%2==1 and flag == False:
+                    print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(sent),format,"\t",rate,"Mbps\n")
+                    flag=True                               #used to only print once per interval
+                    oldEnd = end                            #update the new start-interval
+                    sent = 0                                #reset the number of kilobytes recieved for the next interval
+                end = clockToSek(time.ctime())
+            
+            rate=math.trunc(sent*8*ratemultiplier/interval) #calculates rate in Mbps (Megabit per second)
+            end = clockToSek(time.ctime())
+    print(serverip,":",port,"\t",sekToClock(oldEnd-start),"-", sekToClock(end-start),"\t",math.trunc(sent),format,"\t",rate,"Mbps\n")
+
+def nonIntervalClient(goalTime, format, serverip, port, client_sd, string):
+    start = clockToSek(time.ctime())    #Current time
+    oldEnd = start                      #previous timecheck (used in display time intervals)
+    end = start                         #timechecker for each interval
+    sent = 0                            #nr. of kilobytes per interval if used
+    totalsent = 0                       #nr. of total kilobytes independent of interval
+    flag=True                           #a check to only print once per interval
+    rate = 0                            #in Mbps
+    ratemultiplier=1                    #for converting to Mbps later
+    
+    while end-start < goalTime:
+            client_sd.send(string.encode())
+            if format == "MB":              #If the client wants to display transfer in Megabytes
+                sent += 1/(1000)
+                ratemultiplier=1            #for converting to Mbps later
+            elif format == "KB":            #If the client wants to display transfer in Kilobytes
+                sent += 1
+                ratemultiplier=1/1000       #for converting to Mbps later
+            elif format == "B":             #If the client wants to display transfer in Bytes
+                sent += 1000
+                ratemultiplier=1/1000000    #for converting to Mbps later
+            end = clockToSek(time.ctime())
+    rate=math.trunc(sent*8*ratemultiplier/goalTime) #calculate rate in Megabit per second
+    print(serverip,":",port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(sent),format,"\t",rate,"Mbps\n")
+
+def intervalClientChecker(goalTime, interval, format, serverip, port, client_sd):
+    
+    clientSyncher(client_sd, "Start", "Start")
+
+    #making a string consisting of 1000 bytes
+    string=""
+    for i in range(951): #exactly 1000 bytes
+        string+="a"
+    
+
+    if interval != 0:
+        intervalClient(goalTime, interval, format, serverip, port, client_sd, string)
+    else:
+        nonIntervalClient(goalTime, format, serverip, port, client_sd, string)
+
+def trackerBytesServer(goalTime, interval, format, serverip, port, num, connectionSocket):
+    serverSyncher(connectionSocket, "Start", "Start")
+
+    sent = 0
+    recieved = 0                                    #Defining amount of KB sent
+    #string=""                                   #Defining the string of 1000 bytes
+    numberArray=re.findall("(\d+)", num)        #Finds the number in the string e.g. ['50']
+    print("NumberArray",numberArray)
+    letterArray=re.findall("(\D+)", num)        #Finds the letter in the string e.g. ['M']
+    print("Letterarray:", letterArray)
+
+    tall = numberArray[0]                       #Making a variable out of the number e.g. tall == '50'
+    tall = int(tall)                            #Making this variable an int to do algorithmics tall == 50
+
+    if letterArray[0] == "B":                   #Tests if the amount sendt is in Bytes
+        #tall = tall/1000                        #Does the corresponding conversion
+        tall = tall*1000
+    elif letterArray[0] == "K":                 #Tests if the amount sendt is in Kilobytes
+        tall = tall * 1                         #Does the corresponding conversion
+    elif letterArray[0] == "M":                 #Tests if the amount sendt is in Megabytes
+        #tall = tall*1000                        #Does the corresponding conversion
+        tall = tall/1000
+    
+    start = clockToSek(time.ctime())
+    while True:
+        if connectionSocket.recv(2048).decode() != "":
+            print(connectionSocket.recv(2048).decode())
+            if connectionSocket.recv(2048).decode() == "stop":
+                print("slutter---")
+                break
+            if format == "MB":   #If the client wants to display transfer in Megabytes
+                recieved += 1000
+                ratemultiplier=1                #for converting to Mbps later
+            elif format == "KB": #If the client wants to display transfer in Kilobytes
+                recieved += 1
+                ratemultiplier=1/1000           #for converting to Mbps later
+            elif format == "B":  #If the client wants to display transfer in Bytes
+                recieved += 1/1000
+                ratemultiplier=1/1000000        #for converting to Mbps later
+            print(recieved)
+            end = clockToSek(time.ctime())
+        else:
+            print("avbryter")
+            break
+    rate=math.trunc(recieved*8*ratemultiplier/goalTime) #calculate rate in Megabit per second
+    print(serverip,":",port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",rate,"Mbps\n")
+
+
+    if format == "MB":                      #Tests if the display-format should be Megabytes
+        recieved = recieved/1000                    #Does the corresponding conversion
+        print(recieved, format, "was recieved") #Prints how much was sent
+    elif format == "KB":                    #Tests if the display-format should be Megabytes
+        recieved = recieved*1                       #Does the corresponding conversion
+        print(recieved, format, "was recieved") #Prints how much was sent
+    elif format == "B":                     #Tests if the display-format should be Megabytes
+        recieved = recieved*1000                    #Does the corresponding conversion
+        print(recieved, format, "was recieved") #Prints how much was sent
+    
+def trackerBytesClient(num, format, client_sd):
+    
+    clientSyncher(client_sd, "Start", "Start")
+    
+    sent = 0                    #Defining amount of KB sent
+    string=""                   #Defining the string of 1000 bytes
+    numberArray=re.findall("(\d+)", num)        #Finds the number in the string
+    letterArray=re.findall("(\D+)", num)        #Finds the letter in the string
+
+    tall = numberArray[0]                       #Making a variable out of the number
+    tall = int(tall)                            #Making this variable an int to do algorithmics
+
+    if letterArray[0] == "B":                   #Tests if the amount sendt is in Bytes
+        tall = tall/1000                        #Does the corresponding conversion to KB
+    elif letterArray[0] == "K":                 #Tests if the amount sendt is in Kilobytes
+        tall = tall * 1                         #Does the corresponding conversion to KB
+    elif letterArray[0] == "M":                 #Tests if the amount sendt is in Megabytes
+        tall = tall*1000                        #Does the corresponding conversion to KB
+ 
+    for i in range(951): #exactly 1000 bytes
+        string+="a"         #fills it with a's
+    print("Starter å sende bytes")
+    while sent < tall:
+        client_sd.send(string.encode())
+        sent += 1
+        print("sent 1000 bytes")
+
+    if format == "MB":                  #Tests if the display-format should be Megabytes
+        sent = sent/1000                #Does the corresponding conversion
+        print(sent, format, "was sent") #Prints how much was sent
+    elif format == "KB":                #Tests if the display-format should be Megabytes
+        sent = sent*1                   #Does the corresponding conversion
+        print(sent, format, "was sent") #Prints how much was sent
+    elif format == "B":                 #Tests if the display-format should be Megabytes
+        sent = sent*1000                #Does the corresponding conversion
+        print(sent, format, "was sent") #Prints how much was sent
+   
+    client_sd.send("stop".encode())
+"""
+    client_sd.send("Finished".encode())
+    print("Sent Finished call")
+"""
+
+def handleClient(connectionSocket, addr):
+    print("Client connected with", arguments.serverip,"port",arguments.port)
+
+    print("\nID\t\t\tInterval\tTransfer\tBandwidth\n")
+
+    data = connectionSocket.recv(2048)
+    client_options = pickle.loads(data) #retrieves client-options
+    print(client_options)
+    
+    if client_options.num == None:
+        intervalServerChecker(client_options.time, client_options.interval, client_options.format, arguments.serverip, arguments.port, connectionSocket)
+    else:
+        trackerBytesServer(client_options.time, client_options.interval, client_options.format, arguments.serverip, arguments.port, client_options.num, connectionSocket)
+
+
+    serverSyncher(connectionSocket, "BYE", "ACK:BYE")
+    connectionSocket.close()
+
+def server(arguments):
+    #this will run if the program is run in server mode (-s)
+    serverSocket = socket(AF_INET, SOCK_STREAM) #Create a server socket
+    try:
+        serverSocket.bind((str(arguments.bind), arguments.port))
+    except:
+        print("Bind failed - Wait and try again, or check if the IP-address is supported")
+        sys.exit()
+    
+    serverSocket.listen(1)
+
+    while True:
+        connectionSocket, addr = serverSocket.accept()
+        thread.start_new_thread(handleClient, (connectionSocket, addr))
+
+def client(arguments):
+    #this will run if the program is run in client mode (-c)
+    client_sd = socket(AF_INET, SOCK_STREAM)
+    client_sd.connect((str(arguments.serverip), int(arguments.port))) 
+    #picke sending
+    data_string=pickle.dumps(arguments)
+    client_sd.send(data_string)
+
+    print("\nID\t\t\tInterval\tTransfer\tBandwidth\n")
+
+    if arguments.num == None:
+        intervalClientChecker(arguments.time, arguments.interval, arguments.format, arguments.serverip, arguments.port, client_sd)
+    else:
+        print("starting trackerBytesClient")
+        trackerBytesClient(arguments.num, arguments.format, client_sd)
+        print("Finished trackerBytesClient()")
+    
+    
+    clientSyncher(client_sd, "ACK:BYE", "BYE")
+    """
+    #Sending BYE-message to terminate socket
+    i = 0
+    j = 1
+    while True:
+        client_sd.send("BYE".encode())
+        print("Sent BYE nr.",i)
+        i+=1
+        msg = client_sd.recv(2048).decode()
+        if msg == "ACK:BYE":
+            print(msg)
+            client_sd.send("BYE".encode())
+            print("Sent BYE nr.", i)
+            break
+    print("Client is finished")
+    """
+
+parser = argparse.ArgumentParser(description="Optional Arguments", epilog="end of help")
+
+#Adds options to the program
+#Server options
+parser.add_argument("-s", "--server", action="store_true", help="Assigns server-mode")  #Server specific
+parser.add_argument("-c", "--client", action="store_true", help="Assigns client-mode")  #Client specific
+parser.add_argument("-p", "--port", default="8088", type=check_port, help="Allocate a port number")      #Used by both types
+parser.add_argument("-I", "--serverip", type=check_ip, default="127.0.0.1", help="Set IP-address of server from client") #Client specific
+parser.add_argument("-b", "--bind", type=check_ip, default="127.0.0.1", help="Set IP-address that client can connect to")     #Server specific
+parser.add_argument("-f", "--format", default="MB", type=str, choices=("B", "KB", "MB"), help="Choose format for data size")      #Server specific
+parser.add_argument("-t", "--time", type=check_time, default=25, help="Choose time in seconds") #Client specific
+parser.add_argument("-i", "--interval", type=check_interval, default=0, help="Print statistics every z second") #Client specific
+parser.add_argument("-P", "--parallel", type=check_parallel, default=1, help="Number of parallel connections")
+parser.add_argument("-n", "--num", type=check_bytes, help="Number of bytes you want to send")
+
+#Makes it an object?
+arguments=parser.parse_args()
+
+
+#Finds out if the program is a server or a client (ha dette i en funksjon?)
+if arguments.server or arguments.client:
+    if arguments.server and arguments.client:
+        print("Error: you cannont run this program in both server and client mode at the same time")
+        sys.exit()
+    if arguments.server:
+        print("-----------------------------------------------\n",
+              "A simpleperf server is listening on port", arguments.port,
+              "\n-----------------------------------------------\n")
+        #go into servermode
+        server(arguments)
+    if arguments.client:
+        print("---------------------------------------------------------------\n",
+              "A simpleperf client connecting to server", arguments.serverip, "port", arguments.port,
+              "\n---------------------------------------------------------------\n")
+        #go into clientmode
+        client(arguments)
+else:
+    print("Error: you must run either in server or client mode")
+    sys.exit()
+
+
+#TODO
+#Trenger select.select() for å kunne filtrere ut når det kommer data og når det ikke kommer data fra sockets.
+#Med dette kan jeg gjøre handshake riktig vei, og slippe å bruke connectionSocket.recv(2048).decode() != ""
+#må være på linux for å kunne bruke select.select
+#prøv å implementer alt det andre først (som -p)
