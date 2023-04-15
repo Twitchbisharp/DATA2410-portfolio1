@@ -5,4 +5,4 @@
 
 ID			Interval	Transfer	Bandwidth
 
-10.0.5.2 : 8088 	0.0 - 25.0 	53 MB 	 	17.0 Mbps
+10.0.5.2 : 8088 	0.0 - 25.0 	11 MB 	 	3.67 Mbps

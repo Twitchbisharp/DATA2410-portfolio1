@@ -114,18 +114,27 @@ def clockToSek(inTime):     #Converts clock-format into seconds
 def serverSyncher(connectionSocket, recvWord, sendWord):        #Handshake from the server used in initial and final handshake
     while True:     #infinite loop untill 'break'
         connectionSocket.send(sendWord.encode())        #send the sendWord to client
-        message = connectionSocket.recv(2048).decode()
-        if message in recvWord:                         #if the message contains the wanted recvWord
-            break                                       #exit the loop
-    print(recvWord)                                     #print the wanted recvWord
+        message = connectionSocket.recv(99999).decode()
+        print(message)
+        if recvWord in message:                         #if the message contains the wanted recvWord
+            #connectionSocket.send(sendWord.encode())
+            print(recvWord)                                     #print the wanted recvWord
+            break                                        #exit the loop
+        else:
+            continue
+
 
 def clientSyncher(client_sd, recvWord, sendWord):           #Handshake from the client used in initial and final handlshake
     while True:     #infinite loop
+        #client_sd.send(sendWord.encode())
         message = client_sd.recv(2048).decode() #takes in a message from server if there are any
-        if message in recvWord:                 #if message contains recvWord
+        print(message)
+        if recvWord in message:                 #if message contains recvWord
             client_sd.send(sendWord.encode())   #send message back to server that client got it
+            print(recvWord)                     #print wanted word
             break                               #exit loop
-    print(recvWord)                             #print wanted word
+                               
+
     
 
 def intervalServer(goalTime, interval, format, serverip, port, connectionSocket): #If the server is run with intermittent updates
@@ -196,8 +205,10 @@ def nonIntervalServer(goalTime, format, serverip, port, connectionSocket): #if t
     ratemultiplier=1                    #for converting to Mbps later
 
     while end-start < goalTime:         #A loop lasting the specified duration
-            msg = connectionSocket.recv(2048).decode()  #recieve something from the client
-            if msg != "":                               #if the message doesn't contain nothing
+            msg = connectionSocket.recv(1000).decode()  #recieve something from the client
+            #print(sys.getsizeof(msg))                
+            if msg != "": #if the message doesn't contain nothing
+                #"print(".")"
                 if format == "MB":                      #If the client wants to display transfer in Megabytes
                     recieved += 1/(1000)                #Converts the recieved bytes into MB: 1KB / 1000 = 0.001MB
                     ratemultiplier=1                    #for converting to Mbps later
@@ -211,9 +222,10 @@ def nonIntervalServer(goalTime, format, serverip, port, connectionSocket): #if t
     rate=recieved*8*ratemultiplier/goalTime             #calculate rate in Megabit per second
     print(serverip,":",port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",round(rate, 2),"Mbps")    #prints the results
 
+
 def intervalServerChecker(goalTime, interval, format, serverip, port, connectionSocket):    #used to determine if the client wants intermittent updates or not
     
-    serverSyncher(connectionSocket, "Start", "Start")         #Synchs up the server to the client.
+    #serverSyncher(connectionSocket, "Start", "Start")         #Synchs up the server to the client.
 
     if interval != 0:       #if the interval-parameter is not null
         intervalServer(goalTime, interval, format, serverip, port, connectionSocket)    #then the client wants intermittent updates, executes the corresponding function
@@ -303,10 +315,10 @@ def nonIntervalClient(goalTime, format, serverip, port, client_sd, string): #if 
 
 def intervalClientChecker(goalTime, interval, format, serverip, port, client_sd):   #Checks if the client wants intermittent updates or not
     
-    clientSyncher(client_sd, "Start", "Start")      #Synchs up the client to the server
+    #clientSyncher(client_sd, "Start", "Start")      #Synchs up the client to the server
 
     
-    string=""               #making a string consisting of 1000 bytes
+    string=""           #making a string consisting of 1000 bytes
     for i in range(951):    #exactly 1000 bytes
         string+="a"         #consisting of a's
     
@@ -317,7 +329,7 @@ def intervalClientChecker(goalTime, interval, format, serverip, port, client_sd)
         nonIntervalClient(goalTime, format, serverip, port, client_sd, string)          #then the client does not want intermittent updates, executes the corresponding function
 
 def trackerBytesServer(goalTime, interval, format, serverip, port, num, connectionSocket): #function for server when the number of bytes is specified
-    serverSyncher(connectionSocket, "Start", "Start")       #synches up the server to the client
+    #serverSyncher(connectionSocket, "Start", "Start")       #synches up the server to the client
                                 
     recieved = 0                                #Defining amount of KB sent
     ratemultiplier = 0                          #Used to calculate rate Mbps
@@ -360,7 +372,7 @@ def trackerBytesServer(goalTime, interval, format, serverip, port, num, connecti
     print(serverip,":",port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(recieved),format,"\t",round(rate, 2),"Mbps") #print the results
      
 def trackerBytesClient(num, format, client_sd): #function for client when the number of bytes is specified
-    clientSyncher(client_sd, "Start", "Start")  #synching the client to the server
+    #clientSyncher(client_sd, "Start", "Start")  #synching the client to the server
     
     sent = 0                                    #Defining amount of KB sent
     string=""                                   #Defining the string of 1000 bytes
@@ -408,18 +420,19 @@ def trackerBytesClient(num, format, client_sd): #function for client when the nu
     print(arguments.serverip,":",arguments.port,"\t0.0 -",sekToClock(end-start),"\t",math.trunc(sent),format,"\t",round(rate, 2),"Mbps") #prints the results
 
 def handleClient(connectionSocket, addr):   #A client-handeler that can support mutliple clients
-    print("Client connected with", arguments.serverip,"port",arguments.port)    #prints a message whenever a new client connects to the server
+    
 
     data = connectionSocket.recv(2048)  #recieve message with pickle with client-options
     client_options = pickle.loads(data) #retrieves the client-options (unpacking)
 
+    print("Client connected with", client_options.serverip,"port",arguments.port)    #prints a message whenever a new client connects to the server
 
     if client_options.num == None:      #if the client does not specify number of bytes that it wants to send
-        intervalServerChecker(client_options.time, client_options.interval, client_options.format, arguments.serverip, arguments.port, connectionSocket) #execute the corresponding function
+        intervalServerChecker(client_options.time, client_options.interval, client_options.format, client_options.serverip, arguments.port, connectionSocket) #execute the corresponding function
     else:                               #if the client specifies the number of bytes it wants to send
-        trackerBytesServer(client_options.time, client_options.interval, client_options.format, arguments.serverip, arguments.port, client_options.num, connectionSocket) #execute the corresponding function
+        trackerBytesServer(client_options.time, client_options.interval, client_options.format, client_options.serverip, arguments.port, client_options.num, connectionSocket) #execute the corresponding function
 
-    serverSyncher(connectionSocket, "BYE", "ACK:BYE")   #send a "ACK:BYE"-message, expecting a "BYE"-message in return
+    #serverSyncher(connectionSocket, "BYE", "ACK:BYE")   #send a "ACK:BYE"-message, expecting a "BYE"-message in return
     connectionSocket.close()                            #close the connection to this particular client
 
 def server(arguments): #initial server function
@@ -471,13 +484,13 @@ def client(arguments):    #initial client function, this will run if the program
             intervalClientChecker(arguments.time, arguments.interval, arguments.format, arguments.serverip, arguments.port, connections["client_sd0"]) #execute the corresponding function without thread
         else:                       #if the client wants a specific number of bytes
             trackerBytesClient(arguments.num, arguments.format, connections["client_sd0"])  #execute the corresponding function without thread
-
+    """
     if arguments.parallel > 1:      #if there are parallel connections
         for i in range(arguments.parallel):                                         #iterate through every connection
             clientSyncher(connections["client_sd{0}".format(i)], "ACK:BYE", "BYE")  #Synch every connection to the server and send a BYE-message
     else:                           #if there are only one connection
         clientSyncher(connections["client_sd0"], "ACK:BYE", "BYE")  #synch this one connection to the server and send a BYE-message
-       
+    """   
     
     #closing of all client connections
     if arguments.parallel > 1:                              #if the number of parallel connections is greater than 1
