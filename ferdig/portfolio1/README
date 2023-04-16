@@ -1,0 +1,47 @@
+--------------------------------------
+simpleperf.py HOW TO RUN
+--------------------------------------
+
+----WHEN DONE IN A MININET NETWORK----
+Open a xterm-terminal on a host that has a ip-address and an outgoing router
+Locate yourself to the folder in which simpleperf.py is located inside the xterm window
+start simpleperf.py in server mode while also specifying the IP address with the -b option of your current host e.g. "python3 simpleperf.py -s -b 10.0.5.2"
+The terminal should now print the following:
+---------------------------------------------
+A simpleperf server is listening on port 8088
+---------------------------------------------
+
+ID		Interval	Transfer	Bandwidth
+
+If you get the error-message: "Bind failed - Wait and try again, or check if the IP-address is supported", either do what the error-message says, try again or rebuild your mininet topology and try again.
+Once the server is set up and listening, open a new xterm-window that is going to be the client.
+Again, locate yourself to the folder in which simpleperf.py is located inside the xterm-window.
+To run simpleperf in clientmode on this host specify using the -c option and the IP-address of the server you are trying to connec with (which also is running simpleperf in server mode) e.g. "python3 simpleperf.py -c -I 10.0.5.2"
+By default the client sends packets for a total duration of 25 seconds.
+if you want to further customize how the transfer shall happen use the option -h to see all avalable options e.g. "python3 simpleperf.py -h"
+
+----WHEN DONE IN VISUAL STUDIO CODE-----
+Open simpleperf.py in Visual Studio Code
+Run the program using the "play-button" in the top right.
+You will get the error-message "Error: you must run either in server or client mode", but that is ok
+Use the up-arrow key on the keyboad to copy the last command typed in the VSC-terminal
+Now add the option -s to start the server in default mode. (the server ip is no 127.0.0.1)
+Open another VSC-terminal or split the already existing terminal
+If you can copy the last issued command (being the server command used in the other terminal) use this as a template and replace the -s with a -c
+If not, manually copy the commands used in the previous terminal and replace -s with -c.
+The path should look like something like this: "/bin/python3 /home/felipe/Dokumenter/simpleperf.py -s"
+By default the client-mode connects to the server ip 127.0.0.1, and should therefore work if no ip-addresses were specified on neither server or client side.
+Again, if you want to customize the use of simpleperf.py, use the -h option on either the server or client terminal.
+
+------THINGS TO KEEP IN MIND------
+Some options are specifically for client and server side. This includes:
+	-c	Only for client
+	-s 	Only for server
+	-b	Only for server
+	-I	Only for client
+	-P	Only for client
+	-n	Only for client
+	-t	Only for client
+The rest can be used interchangeably.
+
+Good luck, and happy testing! 
